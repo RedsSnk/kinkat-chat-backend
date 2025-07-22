@@ -1,62 +1,96 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const mysql = require('mysql2/promise');
-const cookie = require('cookie');
 const cors = require('cors');
 
 const app = express();
-app.use(cors({ origin: true, credentials: true }));
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: true, credentials: true }
-});
-
-const db = mysql.createPool({
-  host: 'localhost',
-  user: 'kinkatro_flarumuser',
-  password: 'AmxxPass55',
-  database: 'kinkatro_flarumdatab'
-});
-
-// Simple health endpoint
-app.get('/', (req, res) => res.send('Chat backend is running'));
-
-// Chat handling
-io.use(async (socket, next) => {
-  try {
-    const cookies = cookie.parse(socket.handshake.headers.cookie || '');
-    if (!cookies.flarum_session) return next(new Error('Not logged in'));
-
-    const [rows] = await db.query(
-      'SELECT user_id FROM sessions WHERE id = ?',
-      [cookies.flarum_session]
-    );
-    if (!rows.length) return next(new Error('Session invalid'));
-
-    const [users] = await db.query(
-      'SELECT id, username FROM users WHERE id = ? AND is_activated=1',
-      [rows[0].user_id]
-    );
-    if (!users.length) return next(new Error('User not found'));
-
-    socket.user = { id: users[0].id, username: users[0].username };
-    next();
-  } catch (e) {
-    next(new Error('Auth error'));
+  cors: {
+    origin: '*', // Change this to your domain if needed
+    methods: ['GET', 'POST']
   }
 });
 
-io.on('connection', (socket) => {
-  io.emit('chat message', { username: 'System', message: `${socket.user.username} joined the chat.` });
+app.use(cors());
+app.use(express.static('public'));
 
-  socket.on('chat message', ({ message }) => {
-    io.emit('chat message', { username: socket.user.username, message });
+// In-memory user store (for now)
+const users = {};
+
+function updateUserList() {
+  io.emit('user list', Object.values(users).map(u => u.username));
+}
+
+io.on('connection', (socket) => {
+  console.log('A user connected:', socket.id);
+
+  socket.on('login', ({ username, role }) => {
+    users[socket.id] = { username, role, isPerforming: false };
+    socket.broadcast.emit('chat message', { username: 'System', message: `${username} joined the chat.` });
+    updateUserList();
+  });
+
+  socket.on('chat message', (data) => {
+    const user = users[socket.id];
+    if (user) {
+      console.log('Message:', data);
+      io.emit('chat message', { ...data, role: user.role });
+    }
+  });
+
+  socket.on('whisper', ({ to, message }) => {
+    const fromUser = users[socket.id];
+    const toSocketId = Object.keys(users).find(id => users[id].username === to);
+    if (fromUser && toSocketId) {
+      io.to(toSocketId).emit('chat message', { username: `${fromUser.username} (whisper)`, message });
+      socket.emit('chat message', { username: `(whisper to ${to})`, message });
+    } else {
+      socket.emit('chat message', { username: 'System', message: `Could not find user ${to}.` });
+    }
+  });
+
+  socket.on('tip', ({ to, amount }) => {
+    const fromUser = users[socket.id];
+    const toSocketId = Object.keys(users).find(id => users[id].username === to && users[id].role === 'model');
+    if (fromUser && toSocketId) {
+      // In a real application, you would process the payment here.
+      console.log(`${fromUser.username} tipped ${to} $${amount}`);
+      io.to(toSocketId).emit('chat message', { username: 'System', message: `You received a $${amount} tip from ${fromUser.username}!` });
+      socket.emit('chat message', { username: 'System', message: `You tipped ${to} $${amount}.` });
+    } else {
+      socket.emit('chat message', { username: 'System', message: `Could not find model ${to}.` });
+    }
+  });
+
+  socket.on('start performance', () => {
+    const user = users[socket.id];
+    if (user && user.role === 'model') {
+      user.isPerforming = true;
+      io.emit('chat message', { username: 'System', message: `${user.username} has started a performance!` });
+    }
+  });
+
+  socket.on('stop performance', () => {
+    const user = users[socket.id];
+    if (user && user.role === 'model') {
+      user.isPerforming = false;
+      io.emit('chat message', { username: 'System', message: `${user.username} has ended the performance.` });
+    }
   });
 
   socket.on('disconnect', () => {
-    io.emit('chat message', { username: 'System', message: `${socket.user.username} left.` });
+    const user = users[socket.id];
+    if (user) {
+      io.emit('chat message', { username: 'System', message: `${user.username} left.` });
+      delete users[socket.id];
+      updateUserList();
+    }
+    console.log('User disconnected:', socket.id);
   });
 });
 
-server.listen(process.env.PORT || 3000, () => console.log('Server started'));
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
