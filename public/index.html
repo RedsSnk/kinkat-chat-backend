@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Simple Chat</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; background: #111; color: #fff; }
+    #main-container { display: flex; max-width: 800px; margin: 0 auto; }
+    #chat-container { flex-grow: 1; }
+    #user-list-container { width: 200px; margin-left: 20px; border-left: 1px solid #333; padding-left: 20px; }
+    #chat { border: 1px solid #333; padding: 10px; height: 300px; overflow-y: scroll; }
+    #login-container { max-width: 500px; margin: 0 auto; }
+    input { width: 80%; padding: 10px; }
+    button { padding: 10px; }
+    .model-message { color: #ffc107; }
+    #performance-controls { margin-top: 10px; }
+    #user-list { list-style: none; padding: 0; }
+    .tip-button { margin-left: 10px; }
+  </style>
+</head>
+<body>
+  <div id="login-container">
+    <h2>Login</h2>
+    <input id="username" placeholder="Enter your username...">
+    <label>
+      <input type="checkbox" id="is-model">
+      Login as a model
+    </label>
+    <button onclick="login()">Login</button>
+  </div>
+
+  <div id="main-container" style="display: none;">
+    <div id="chat-container">
+      <h2>Chatroom</h2>
+      <div id="chat"></div>
+      <input id="message" placeholder="Type a message or /w <username> <message>">
+      <button onclick="sendMessage()">Send</button>
+      <div id="performance-controls" style="display: none;">
+        <button onclick="startPerformance()">Start Performance</button>
+        <button onclick="stopPerformance()">Stop Performance</button>
+      </div>
+    </div>
+    <div id="user-list-container">
+      <h2>Users</h2>
+      <ul id="user-list"></ul>
+    </div>
+  </div>
+
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script>
+    const socket = io();
+    let username = '';
+    let role = 'user';
+
+    function login() {
+      const usernameInput = document.getElementById('username');
+      const isModelCheckbox = document.getElementById('is-model');
+      username = usernameInput.value;
+      role = isModelCheckbox.checked ? 'model' : 'user';
+      if (username) {
+        socket.emit('login', { username, role });
+        document.getElementById('login-container').style.display = 'none';
+        document.getElementById('main-container').style.display = 'flex';
+        if (role === 'model') {
+          document.getElementById('performance-controls').style.display = 'block';
+        }
+      }
+    }
+
+    socket.on('chat message', function(data) {
+      const chat = document.getElementById('chat');
+      const messageClass = data.role === 'model' ? 'model-message' : '';
+      chat.innerHTML += `<div class="${messageClass}"><b>${data.username}:</b> ${data.message}</div>`;
+      chat.scrollTop = chat.scrollHeight;
+    });
+
+    socket.on('user list', function(users) {
+      const userList = document.getElementById('user-list');
+      userList.innerHTML = '';
+      users.forEach(user => {
+        const li = document.createElement('li');
+        li.textContent = user;
+        if (user !== username) {
+            const tipButton = document.createElement('button');
+            tipButton.textContent = 'Tip';
+            tipButton.className = 'tip-button';
+            tipButton.onclick = () => tip(user);
+            li.appendChild(tipButton);
+        }
+        userList.appendChild(li);
+      });
+    });
+
+    function sendMessage() {
+      const msgInput = document.getElementById('message');
+      const message = msgInput.value;
+      if (message) {
+        if (message.startsWith('/w ') || message.startsWith('/whisper ')) {
+          const parts = message.split(' ');
+          const command = parts.shift();
+          const to = parts.shift();
+          const privateMessage = parts.join(' ');
+          socket.emit('whisper', { to, message: privateMessage });
+        } else {
+          socket.emit('chat message', { username: username, message: message });
+        }
+        msgInput.value = '';
+      }
+    }
+
+    function startPerformance() {
+      socket.emit('start performance');
+    }
+
+    function stopPerformance() {
+      socket.emit('stop performance');
+    }
+
+    function tip(to) {
+        const amount = prompt(`Enter amount to tip ${to}:`);
+        if (amount) {
+            socket.emit('tip', { to, amount });
+        }
+    }
+  </script>
+</body>
+</html>
